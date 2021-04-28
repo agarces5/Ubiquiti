@@ -8,26 +8,6 @@
 #-------------------##       ####   ##  ##   ####   ######   ####   ##  ##  ######   ####  ---------------------------
 #---------------------------------------------------------------------------------------------------------------------
 
-#---------------- MENU DE AYUDA ----------------
-help_menu() {
-    echo "---------------------- Menu de ayuda ----------------------"
-    echo "-u [usuario]              ---> Para determinar el usuario (admin por defecto)"
-    echo "-i [IP]                   ---> Para poner la IP (ej. 192.168.1.10) o una red (ej. 192.168.1.10/24"
-    echo "-s [ruta_script]          ---> Para poner el script"
-    echo "-c [comando]              ---> Comando para ejecutar en el router (el comando entre '' o \"\") "
-    echo "-p [ruta_file_passwd]     ---> Leer password desde fichero "
-    echo "y (al final de la linea)  ---> Para que no pida confirmacion para reiniciar el router de fabrica antes de cargar un script"
-    exit 1
-}
-#---------------- MOSTRAR ARGUMENTOS ----------------
-mostrar_args() {
-    echo "-----------------------------------------------------------"
-    echo "El usuario es: $user"
-    echo "La IP es: $IP"
-    echo "El script es: $script"
-    echo "El comando es: $comando"
-    echo "El pass esta en: $passwdFile"
-}
 #---------------- LEER PASSWD SEGURO ----------------
 leer_passwd() {
     # -- Se guarda la configuracion de la sesion
@@ -44,43 +24,94 @@ leer_passwd() {
     stty $STTY_SAVE
     echo
 }
-#---------------- EJECUTAR SCRIPT ----------------
-ejecutar_script() {
-    ssh-keygen -f "/home/$USER/.ssh/known_hosts" -R "$5"
-    if [[ $resp == "yes" || $resp == "Yes" || $resp == "y" ]]; then # Ejecutar restableciendo de fábrica
-        echo "Restableciendo de fabrica y Ejecutando script"
-        if [[ -n $2 ]]; then # Si hay pass en el fichero
-            sshpass $1 $2 scp -o "StrictHostKeyChecking no" $3 $4@$5:configuracion.rsc
-            sleep 5s
-            sshpass $1 $2 ssh -o "StrictHostKeyChecking no" $4@$5 "system reset-configuration no-defaults=yes run-after-reset=configuracion.rsc"
-        else # Si no hay pass o está vacía
-            scp -o "StrictHostKeyChecking no" $3 $4@$5:configuracion.rsc
-            sleep 5s
-            ssh -o "StrictHostKeyChecking no" $4@$5 "system reset-configuration no-defaults=yes run-after-reset=configuracion.rsc"
-        fi
-    else # Machacar encima de lo anterior
-        echo "Ejecutando script"
-        if [[ -n $2 ]]; then # Si hay pass en el fichero
-            sshpass $1 $2 scp -o "StrictHostKeyChecking no" $3 $4@$5:configuracion.rsc
-            sleep 5s
-            sshpass $1 $2 ssh -o "StrictHostKeyChecking no" $4@$5 "import configuracion.rsc"
-        else # Si no hay pass o está vacía
-            scp -o "StrictHostKeyChecking no" $3 $4@$5:configuracion.rsc
-            sleep 5s
-            ssh -o "StrictHostKeyChecking no" $4@$5 "import configuracion.rsc"
-        fi
+find() {
+    ssh-keygen -f "/home/$USER/.ssh/known_hosts" -R "$DIRECCION_IP_HOST" >/dev/null
+    sshpass -p ubnt ssh -o "StrictHostKeyChecking no" ubnt@$DIRECCION_IP_HOST sh -c "'
+        cat /tmp/system.cfg > /tmp/prueba.cfg
+        grep "$buscador" /tmp/prueba.cfg
+        exit
+        '"
+}
+mostrar() {
+    ssh-keygen -f "/home/$USER/.ssh/known_hosts" -R "$DIRECCION_IP_HOST" >/dev/null
+    if [[ -z $1 ]]; then
+        ssh -o "StrictHostKeyChecking no" ubnt@$DIRECCION_IP_HOST sh -c "'
+        cat /tmp/system.cfg > /tmp/prueba.cfg
+        cat /tmp/prueba.cfg
+        exit
+        '"
+    else
+        sshpass -p $1 ssh -o "StrictHostKeyChecking no" ubnt@$DIRECCION_IP_HOST sh -c "'
+        cat /tmp/system.cfg > /tmp/prueba.cfg
+        cat /tmp/prueba.cfg
+        exit
+        '"
     fi
 }
-#---------------- EJECUTAR COMANDO ----------------
-ejecutar_comando() {
-    ssh-keygen -f "/home/$USER/.ssh/known_hosts" -R "$4"
-    if [[ -n $2 ]]; then # Si hay pass en el fichero
-        sshpass $1 $2 ssh -o "StrictHostKeyChecking no" $3@$4 $5
-    else # Si no hay pass o está vacía
-        ssh -o "StrictHostKeyChecking no" $3@$4 $5
+crearScript() {
+    linea=not_empty
+    touch scriptConfig.sh
+    cat scriptConfig.sh >scriptConfig.sh
+    chmod +x scriptConfig.sh
+    echo "cat /tmp/system.cfg > /tmp/prueba.cfg" >>scriptConfig.sh
+    mostrar $1
+    echo "Modificar o añadir línea: (Dejar vacío para finalizar)"
+    until [[ -z $linea ]]; do
+        # echo -n "Buscar comando a modificar: "
+        # read buscador
+        # if [[ -n $buscador ]]; then
+        #     find
+        read linea
+        # else
+        #     linea=
+        # fi
+        if [[ -n $linea ]]; then
+            IFS== read -r conf cambio <<<$linea
+            echo "(grep -v \"$conf\" /tmp/prueba.cfg && echo \"$linea\") | sort > /tmp/system.cfg" >>scriptConfig.sh
+        fi
+    done
+    echo cfgmtd -f /tmp/system.cfg -w >>scriptConfig.sh
+    echo /usr/etc/rc.d/rc.softrestart save >>scriptConfig.sh
+}
+# modificar_script(){
+    OLD_IP=$2
+    IFS=. read -r ip1 ip2 ip3 ip4 <<<$OLD_IP
+    let ip4++
+    NEW_IP="$ip1.$ip2.$ip3.$ip4"
+    sed -i 's/$OLD_IP/$NEW_IP/g' scriptConfig.sh 
+}
+realizar_cambios() {
+    # modificar_script
+    ssh-keygen -f "/home/$USER/.ssh/known_hosts" -R "$2"
+    if [[ -n $1 ]]; then
+        sshpass -p $1 ssh -o "StrictHostKeyChecking no" ubnt@$2 'sh -s' <scriptConfig.sh
+    else
+        ssh -o "StrictHostKeyChecking no" ubnt@$2 'sh -s' <scriptConfig.sh
     fi
 }
-
+cambioUnico() {
+    SECRET_PASSWD=$1; OLD_IP=$2; OLD_MASK=$3; NEW_IP=$4; NEW_MASK=$5;
+    ssh-keygen -f "/home/$USER/.ssh/known_hosts" -R "$2"
+    if [[ -n $1 ]]; then
+        sshpass -p $1 ssh -o "StrictHostKeyChecking no" ubnt@$2 sh -c "'
+        buscar=$2; nuevo=$4
+        par=$(grep \<$2\> /tmp/system.cfg | awk -F'.' {' print $1'.'$2 '})
+        sed -i 's/$par.ip=$2/$par.ip=$4/g' /tmp/system.cfg
+        sed -i 's/$par.netmask=$3/$par.netmask=$5/g' /tmp/system.cfg
+        cfgmtd -f /tmp/system.cfg -w
+        /usr/etc/rc.d/rc.softrestart save
+        '"
+    else
+        ssh -o "StrictHostKeyChecking no" ubnt@$2 sh -c "'
+        buscar=$2; nuevo=$4
+        par=$(grep "\<$2\>" /tmp/system.cfg | awk -F'.' {' print $1"."$2 '})
+        sed -i s/$par.ip=$2/$par.ip=$4/g /tmp/system.cfg
+        sed -i s/$par.netmask=$3/$par.netmask=$5/g /tmp/system.cfg
+        cfgmtd -f /tmp/system.cfg -w
+        /usr/etc/rc.d/rc.softrestart save
+        '"
+    fi
+}
 #---------------- FUNCIONES PARA CALCULAR PARAMETROS DE LA RED ----------------
 ipToint() { # PASAR UNA IP A ENTERO
     local a b c d
@@ -119,8 +150,17 @@ network() { # CALCULAR RED
     shift
     intToip $((addr & mask))
 }
+help_add_passwd() {
+    echo "' 
+    MENU DE AYUDA
+    MODO DE USO:
+        add_passwd [IP] ----> pide por pantalla la contraseña
+        add_passwd [IP][password] ----> añade directamente la contraseña
+    
+    '"
+}
 add_passwd() {
-    # Sin pedir IP  --> Se ejecuta add_passwd $IP
+    # Sin pedir IP  --> Se ejecuta add_passwd $IP $SECRET_PASSWD
     #----------- GUARDAR VARIABLES ----------------
     local passwdFile=pass.conf
     local key=key
